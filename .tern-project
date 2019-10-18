@@ -1,0 +1,10 @@
+{
+    "plugins": {
+        "node": {},
+        "modules": {},
+        "es_modules": {},
+        "webpack": {
+            "configPath": "./build/webpack.config.js"
+        }
+    }
+}
