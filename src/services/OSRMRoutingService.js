@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+const _ = require('lodash');
 const request = require('request-promise-native');
 // const _ = require('lodash');
 
@@ -31,16 +32,10 @@ const getRouteNodesForLocations = async locations => {
   const response = await request(options);
 
   const {
-    routes: [
-      {
-        legs: [
-          {
-            annotation: { nodes }
-          }
-        ]
-      }
-    ]
+    routes: [{ legs }]
   } = response;
+
+  const nodes = _.flatten(legs.map(({ annotation: { nodes: n } }) => n));
 
   return nodes.reduce((acc, nodeId, i, arr) => {
     if (nodeId !== arr[i - 1]) {
