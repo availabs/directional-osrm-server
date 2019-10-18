@@ -1,4 +1,5 @@
 const restify = require('restify');
+const corsMiddleware = require('restify-cors-middleware');
 
 const server = restify.createServer({
   name: 'directional-osrm-server',
@@ -6,6 +7,15 @@ const server = restify.createServer({
 });
 
 const { getRouteWaysForLocations } = require('./src/controllers/routeHandler');
+
+const cors = corsMiddleware({
+  origins: ['*'],
+  allowHeaders: ['Authorization'],
+  exposeHeaders: ['Authorization']
+});
+
+server.pre(cors.preflight);
+server.use(cors.actual);
 
 server.use(restify.plugins.acceptParser(server.acceptable));
 // server.use(restify.plugins.queryParser());
