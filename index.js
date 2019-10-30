@@ -7,6 +7,7 @@ const server = restify.createServer({
 });
 
 const { getRouteWaysForLocations } = require('./src/controllers/routeHandler');
+const { getWaysForCoordinates } = require('./src/controllers/matchHandler');
 
 const cors = corsMiddleware({
   origins: ['*'],
@@ -22,6 +23,7 @@ server.use(restify.plugins.acceptParser(server.acceptable));
 server.use(restify.plugins.bodyParser());
 
 server.post('/route', getRouteWaysForLocations);
+server.post('/match', getWaysForCoordinates);
 
 server.listen(7182, function cb() {
   console.log('%s listening at %s', server.name, server.url);

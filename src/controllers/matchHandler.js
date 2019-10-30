@@ -1,21 +1,18 @@
 const _ = require('lodash');
 
-const locationsToNodesDAO = require('../daos/coordsToNodesDAO');
+const { getMatchedNodesForCoordinates } = require('../daos/coordsToNodesDAO');
 const node2WaysDAO = require('../daos/node2WaysDAO');
 
-const getRouteWaysForLocations = async (req, res, next) => {
+const getWaysForCoordinates = async (req, res, next) => {
   try {
-    console.log('='.repeat(25));
-    console.log(req.body);
-    console.log('='.repeat(25));
-    const { locations } =
-      typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+    const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+    // console.error(JSON.stringify(body, null, 4));
 
-    console.error(JSON.stringify({ locations }, null, 4));
+    const { coordinates } = body;
 
-    const nodes = await locationsToNodesDAO.getRouteNodesForLocations(
-      locations
-    );
+    console.error(JSON.stringify({ coordinates }, null, 4));
+
+    const nodes = await getMatchedNodesForCoordinates(coordinates);
     const nodes2Ways = await node2WaysDAO.getNodes2Ways(nodes);
 
     if (!(Array.isArray(nodes) && nodes.length > 0)) {
@@ -75,16 +72,15 @@ const getRouteWaysForLocations = async (req, res, next) => {
       return acc;
     }, []);
 
-    // console.error(JSON.stringify({ ways3 }, null, 4));
     res.send({ ways: ways3 });
     return next();
   } catch (err) {
-    console.log(err);
+    // console.log(err);
     res.send({ err });
     return next(false);
   }
 };
 
 module.exports = {
-  getRouteWaysForLocations
+  getWaysForCoordinates
 };
