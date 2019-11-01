@@ -5,15 +5,14 @@ const node2WaysDAO = require('../daos/node2WaysDAO');
 
 const getWaysForCoordinates = async (req, res, next) => {
   try {
-    const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
-    // console.error(JSON.stringify(body, null, 4));
+    const dataRequest = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
 
-    const { coordinates } = body;
+    const { nodes, confidences } = await getMatchedNodesForCoordinates(dataRequest);
 
-    console.error(JSON.stringify({ coordinates }, null, 4));
+    const confidence = Math.min(...confidences)
 
-    const nodes = await getMatchedNodesForCoordinates(coordinates);
     const nodes2Ways = await node2WaysDAO.getNodes2Ways(nodes);
+
 
     if (!(Array.isArray(nodes) && nodes.length > 0)) {
       res.send({ ways: null });
@@ -72,10 +71,10 @@ const getWaysForCoordinates = async (req, res, next) => {
       return acc;
     }, []);
 
-    res.send({ ways: ways3 });
+    res.send({ ways: ways3, confidence });
     return next();
   } catch (err) {
-    // console.log(err);
+    console.log(err);
     res.send({ err });
     return next(false);
   }

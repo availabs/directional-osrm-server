@@ -5,17 +5,10 @@ const node2WaysDAO = require('../daos/node2WaysDAO');
 
 const getRouteWaysForLocations = async (req, res, next) => {
   try {
-    console.log('='.repeat(25));
-    console.log(req.body);
-    console.log('='.repeat(25));
-    const { locations } =
-      typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+    const dataRequest = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
 
-    console.error(JSON.stringify({ locations }, null, 4));
+    const nodes = await locationsToNodesDAO.getRouteNodesForLocations(dataRequest)
 
-    const nodes = await locationsToNodesDAO.getRouteNodesForLocations(
-      locations
-    );
     const nodes2Ways = await node2WaysDAO.getNodes2Ways(nodes);
 
     if (!(Array.isArray(nodes) && nodes.length > 0)) {

@@ -5,12 +5,24 @@ const request = require('request-promise-native');
 
 const HOST = 'http://127.0.0.1:5000';
 
-const getRouteNodesForLocations = async locations => {
-  const locs = locations.map(({ lat, lon }) => `${lon},${lat}`).join(';');
+const getRouteNodesForLocations = async (dataRequest = {}) => {
+  const { locations, radius, snapping, continue_straight = true } = dataRequest;
+
+  const lnstr = locations.map(({ lon, lat }) => `${lon},${lat}`).join(';');
+
+  let queryParams = `?annotations=true&continue_straight=${continue_straight}`;
+
+  if (!_.isNil(radius)) {
+    queryParams += `&radiuses=${_.fill(Array(locations.length), radius)}`;
+  }
+
+  if (!_.isNil(snapping)) {
+    queryParams += `&snapping=${snapping}`;
+  }
 
   const options = {
     method: 'GET',
-    uri: `${HOST}/route/v1/driving/${locs}?annotations=true`,
+    uri: `${HOST}/route/v1/driving/${lnstr}${queryParams}`,
     headers: {
       'User-Agent': 'Request-Promise'
     },
@@ -33,12 +45,47 @@ const getRouteNodesForLocations = async locations => {
   }, []);
 };
 
-const getMatchedNodesForCoordinates = async coordinates => {
-  const locs = coordinates.map(([lon, lat]) => `${lon},${lat}`).join(';');
+const getMatchedNodesForCoordinates = async (dataRequest = {}) => {
+  const {
+    coordinates,
+    tidy,
+    radius,
+    generate_hints,
+    hints,
+    snapping
+  } = dataRequest;
+
+  if (!Array.isArray(coordinates)) {
+    throw new Error('ERROR: Coordinates are required');
+  }
+
+  const lnstr = coordinates.map(([lon, lat]) => `${lon},${lat}`).join(';');
+
+  let queryParams = '?annotations=true';
+
+  if (!_.isNil(tidy)) {
+    queryParams += `&tidy=${tidy}`;
+  }
+
+  if (!_.isNil(radius)) {
+    queryParams += `&radiuses=${_.fill(Array(coordinates.length), radius)}`;
+  }
+
+  if (!_.isNil(generate_hints)) {
+    queryParams += `&generate_hints=${generate_hints}`;
+  }
+
+  if (!_.isNil(hints)) {
+    queryParams += `&hints=${hints}`;
+  }
+
+  if (!_.isNil(snapping)) {
+    queryParams += `&snapping=${snapping}`;
+  }
 
   const options = {
     method: 'GET',
-    uri: `${HOST}/match/v1/driving/${locs}?annotations=true&snapping=any`,
+    uri: `${HOST}/match/v1/driving/${lnstr}${queryParams}`,
     headers: {
       'User-Agent': 'Request-Promise'
     },
@@ -47,18 +94,29 @@ const getMatchedNodesForCoordinates = async coordinates => {
 
   const response = await request(options);
 
-  const {
-    matchings: [{ legs }]
-  } = response;
+  if (_.upperCase(response.code) !== 'OK') {
+    throw Error(`OSRM match response code: ${response.code}`);
+  }
 
-  const nodes = _.flatten(legs.map(({ annotation: { nodes: n } }) => n));
+  const { matchings } = response;
 
-  return nodes.reduce((acc, nodeId, i, arr) => {
-    if (nodeId !== arr[i - 1]) {
-      acc.push(nodeId);
-    }
-    return acc;
-  }, []);
+  const nodes = _(matchings)
+    .map('legs')
+    .flatten()
+    .map('annotation.nodes')
+    .flatten()
+    .value()
+    .reduce((acc, nodeId, i, arr) => {
+      if (nodeId !== arr[i - 1]) {
+        acc.push(nodeId);
+      }
+      return acc;
+    }, []);
+
+  const confidences = _.map(matchings, 'confidence');
+
+  console.error(JSON.stringify({ nodes, confidences }, null, 4));
+  return { nodes, confidences };
 };
 
 module.exports = {
