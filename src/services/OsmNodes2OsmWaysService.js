@@ -19,7 +19,7 @@ const { Client } = require('pg');
 const dedent = require('dedent');
 const _ = require('lodash');
 
-const { Graph } = require('graphlib');
+const { Graph } = require('@dagrejs/graphlib');
 
 const createGraph = require('ngraph.graph');
 const path = require('ngraph.path');
