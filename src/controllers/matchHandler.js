@@ -1,18 +1,20 @@
 const _ = require('lodash');
 
-const { getMatchedNodesForCoordinates } = require('../daos/coordsToNodesDAO');
-const node2WaysDAO = require('../daos/node2WaysDAO');
+const { getMatchedNodesForCoordinates } = require('../services/OSRMService');
+const NodesToWaysService = require('../services/Nodes2WaysService');
 
 const getWaysForCoordinates = async (req, res, next) => {
   try {
-    const dataRequest = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+    const dataRequest =
+      typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
 
-    const { nodes, confidences } = await getMatchedNodesForCoordinates(dataRequest);
+    const { nodes, confidences } = await getMatchedNodesForCoordinates(
+      dataRequest,
+    );
 
-    const confidence = Math.min(...confidences)
+    const confidence = Math.min(...confidences);
 
-    const nodes2Ways = await node2WaysDAO.getNodes2Ways(nodes);
-
+    const nodes2Ways = await NodesToWaysService.getNodes2Ways(nodes);
 
     if (!(Array.isArray(nodes) && nodes.length > 0)) {
       res.send({ ways: null });
@@ -21,7 +23,7 @@ const getWaysForCoordinates = async (req, res, next) => {
 
     const routeInfo = nodes.map(nodeId => ({
       nodeId,
-      node2Ways: nodes2Ways[nodeId]
+      node2Ways: nodes2Ways[nodeId],
     }));
 
     if (nodes.length === 1) {
@@ -81,5 +83,5 @@ const getWaysForCoordinates = async (req, res, next) => {
 };
 
 module.exports = {
-  getWaysForCoordinates
+  getWaysForCoordinates,
 };

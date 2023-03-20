@@ -1,0 +1,9 @@
+module.exports = {
+  '2016_v0_6_0': 'http://localhost:5016',
+  '2017_v0_6_0': 'http://localhost:5017',
+  '2018_v0_6_0': 'http://localhost:5018',
+  '2019_v0_6_0': 'http://localhost:5019',
+  '2020_v0_6_0': 'http://localhost:5020',
+  '2021_v0_6_0': 'http://localhost:5021',
+  '2022_v0_6_0': 'http://localhost:5022',
+};

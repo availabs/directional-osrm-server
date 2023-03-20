@@ -4,17 +4,22 @@
   "description": "",
   "main": "index.js",
   "scripts": {
+    "start": "node index.js",
     "test": "echo \"Error: no test specified\" && exit 1",
     "watch": "nodemon --ignore 'data/*' --ignore --ignore 'logs/*' index.js"
   },
   "author": "Paul Tomchik",
   "license": "MIT",
   "dependencies": {
-    "encoding-down": "^6.3.0",
+    "@dagrejs/graphlib": "^2.1.12",
+    "dedent": "^0.7.0",
+    "dotenv": "^16.0.3",
     "eslint-config-prettier": "^6.4.0",
-    "leveldown": "^5.3.0",
-    "levelup": "^4.3.2",
-    "lodash": "^4.17.15",
+    "lodash": "^4.17.21",
+    "ngraph.graph": "^20.0.1",
+    "ngraph.path": "^1.4.0",
+    "pg": "^8.10.0",
+    "pg-format": "^1.0.4",
     "prettier": "^1.18.2",
     "request": "^2.88.0",
     "request-promise-native": "^1.0.7",
@@ -22,6 +27,9 @@
     "restify-cors-middleware": "^1.1.1"
   },
   "devDependencies": {
+    "@types/dedent": "^0.7.0",
+    "@types/pg": "^8.6.6",
+    "@types/pg-format": "^1.0.2",
     "eslint": "^6.1.0",
     "eslint-config-airbnb-base": "^14.0.0",
     "eslint-plugin-import": "^2.18.2",

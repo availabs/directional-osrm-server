@@ -1,30 +1,57 @@
+/* eslint-disable global-require */
+
+const cluster = require('cluster');
+
+const { join } = require('path');
+
 const restify = require('restify');
 const corsMiddleware = require('restify-cors-middleware');
 
-const server = restify.createServer({
-  name: 'directional-osrm-server',
-  version: '0.0.1'
-});
+const dotenv = require('dotenv');
 
-const { getRouteWaysForLocations } = require('./src/controllers/routeHandler');
-const { getWaysForCoordinates } = require('./src/controllers/matchHandler');
+dotenv.config({ path: join(__dirname, './config/postgres.env') });
 
-const cors = corsMiddleware({
-  origins: ['*'],
-  allowHeaders: ['Authorization'],
-  exposeHeaders: ['Authorization']
-});
+const NUM_WORKERS = 4;
 
-server.pre(cors.preflight);
-server.use(cors.actual);
+if (cluster.isMaster) {
+  console.log(`Master ${process.pid} is running`);
 
-server.use(restify.plugins.acceptParser(server.acceptable));
-// server.use(restify.plugins.queryParser());
-server.use(restify.plugins.bodyParser());
+  // Fork workers.
+  for (let i = 0; i < NUM_WORKERS; i++) {
+    cluster.fork();
+  }
 
-server.post('/route', getRouteWaysForLocations);
-server.post('/match', getWaysForCoordinates);
+  cluster.on('exit', worker => {
+    console.log(`worker ${worker.process.pid} died`);
+  });
+} else {
+  const server = restify.createServer({
+    name: 'directional-osrm-server',
+    version: '0.0.1',
+  });
 
-server.listen(7182, function cb() {
-  console.log('%s listening at %s', server.name, server.url);
-});
+  const {
+    getRouteWaysForLocations,
+  } = require('./src/controllers/routeHandler');
+
+  const cors = corsMiddleware({
+    origins: ['*'],
+    allowHeaders: ['Authorization'],
+    exposeHeaders: ['Authorization'],
+  });
+
+  server.pre(cors.preflight);
+  server.use(cors.actual);
+
+  server.use(restify.plugins.acceptParser(server.acceptable));
+  server.use(restify.plugins.queryParser());
+  server.use(restify.plugins.bodyParser());
+
+  server.post('/route', getRouteWaysForLocations);
+
+  server.listen(7182, function cb() {
+    console.log('%s listening at %s', server.name, server.url);
+  });
+
+  console.log(`Worker ${process.pid} started`);
+}

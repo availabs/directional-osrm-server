@@ -1,0 +1,4 @@
+*
+!osrm_routing_servers.js.template
+!postgres.env.template
+!.gitignore
