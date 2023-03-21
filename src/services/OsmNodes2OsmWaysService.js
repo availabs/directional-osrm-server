@@ -14,20 +14,20 @@
   ;
 */
 
-const { Client } = require('pg');
+const { Pool } = require("pg");
 
-const dedent = require('dedent');
-const _ = require('lodash');
+const dedent = require("dedent");
+const _ = require("lodash");
 
-const { Graph, alg: GraphAlgorithms } = require('@dagrejs/graphlib');
+const { Graph, alg: GraphAlgorithms } = require("@dagrejs/graphlib");
 
-const createGraph = require('ngraph.graph');
-const path = require('ngraph.path');
+const createGraph = require("ngraph.graph");
+const path = require("ngraph.path");
 
-const pgFormat = require('pg-format');
+const pgFormat = require("pg-format");
 
 // NOTE: credentials put into process.env by dotenv in ../../index.js
-const db = new Client();
+const db = new Pool({ max: 10 });
 const is_connected = db.connect();
 
 let req_ctr = 0;
@@ -35,10 +35,10 @@ let req_ctr = 0;
 async function getConflationMapWays(
   conflation_map_version,
   { nodes, geometry },
-  dataRequest,
+  dataRequest
 ) {
   try {
-    nodes = nodes.map(n => +n);
+    nodes = nodes.map((n) => +n);
 
     const req_num = ++req_ctr;
     const req_name = `getConflationMapWays: req ${req_num}`;
@@ -61,7 +61,7 @@ async function getConflationMapWays(
 
     if (!conflation_map_version) {
       throw new Error(
-        `Unsupported conflation_map_version: ${conflation_map_version}`,
+        `Unsupported conflation_map_version: ${conflation_map_version}`
       );
     }
 
@@ -100,8 +100,8 @@ async function getConflationMapWays(
           WHERE ( osm.osm_way_is_roadway(tags) )
         ;
       `,
-        `osm_ways_v${osm_map_version}`,
-      ),
+        `osm_ways_v${osm_map_version}`
+      )
     );
 
     const { rows: osm_ways_result } = await db.query({
@@ -119,7 +119,7 @@ async function getConflationMapWays(
         acc[osm_way_id] = osm_node_ids;
         return acc;
       },
-      {},
+      {}
     );
 
     const osm_way_lookup = {};
@@ -156,7 +156,7 @@ async function getConflationMapWays(
     const edge_path = new Set();
 
     // Not all OSM nodes are in the conflation map. (crosswalk nodes, for example)
-    const start_node_idx = nodes.findIndex(n => seen_osm_nodes.has(n));
+    const start_node_idx = nodes.findIndex((n) => seen_osm_nodes.has(n));
     let source = nodes[start_node_idx];
 
     const backwards_osm_ways = new Set();
@@ -170,7 +170,7 @@ async function getConflationMapWays(
         path_finder.find(source, dest) || path_finder.find(dest, source);
 
       if (!found_path) {
-        console.log('NO found_path');
+        console.log("NO found_path");
         continue;
       }
 
@@ -206,7 +206,7 @@ async function getConflationMapWays(
 
     const edges = [...edge_path];
 
-    const osm_way_w_dirs = edges.map(e => ({
+    const osm_way_w_dirs = edges.map((e) => ({
       osm: +e,
       osm_fwd: +!backwards_osm_ways.has(e),
     }));
@@ -236,8 +236,8 @@ async function getConflationMapWays(
             USING (id)
     `,
         `conflation_map_${conflation_map_version}`,
-        `conflation_map_${conflation_map_year}_ways_${conflation_platform_version}`,
-      ),
+        `conflation_map_${conflation_map_year}_ways_${conflation_platform_version}`
+      )
     );
 
     const { rows: conflation_map_ways_info } = await db.query({
@@ -299,7 +299,7 @@ async function getConflationMapWays(
 
           unseen_gnodes.delete(v);
 
-          let comp = gcomponents.find(c => c.has(v));
+          let comp = gcomponents.find((c) => c.has(v));
 
           if (!comp) {
             comp = new Set(v);
@@ -326,7 +326,7 @@ async function getConflationMapWays(
         }
       }
 
-      const components_summmary = gcomponents.map(component_nodes_set => {
+      const components_summmary = gcomponents.map((component_nodes_set) => {
         const component = [...component_nodes_set];
 
         const {
@@ -340,7 +340,7 @@ async function getConflationMapWays(
               return acc;
             }
 
-            const dests = Object.keys(d).map(n => +n);
+            const dests = Object.keys(d).map((n) => +n);
 
             for (const dest of dests) {
               const { osm_path_idx } = cfl_nodes_2_edges[src][dest];
@@ -359,7 +359,7 @@ async function getConflationMapWays(
           {
             component_min_path_idx: Infinity,
             component_max_path_idx: -Infinity,
-          },
+          }
         );
 
         return {
@@ -376,11 +376,11 @@ async function getConflationMapWays(
         const {
           component_min_path_idx,
         } = components_summmary.find(({ component_nodes_set }) =>
-          component_nodes_set.has(src),
+          component_nodes_set.has(src)
         );
 
         try {
-          const dests = Object.keys(cfl_nodes_2_edges[src]).map(n => +n);
+          const dests = Object.keys(cfl_nodes_2_edges[src]).map((n) => +n);
 
           for (const dest of dests) {
             const { cfl_way_id, osm_path_idx } = cfl_nodes_2_edges[src][dest];
@@ -395,7 +395,7 @@ async function getConflationMapWays(
         } catch (err) {
           // FIXME: ?
           cfl_g.removeNode(src);
-          console.error('src node:', src);
+          console.error("src node:", src);
           console.error(err);
         }
       }
@@ -404,11 +404,11 @@ async function getConflationMapWays(
         const {
           component_max_path_idx,
         } = components_summmary.find(({ component_nodes_set }) =>
-          component_nodes_set.has(sink),
+          component_nodes_set.has(sink)
         );
 
         try {
-          const srcs = Object.keys(rev_cfl_nodes_2_edges[sink]).map(n => +n);
+          const srcs = Object.keys(rev_cfl_nodes_2_edges[sink]).map((n) => +n);
 
           for (const src of srcs) {
             const { cfl_way_id, osm_path_idx } = rev_cfl_nodes_2_edges[sink][
@@ -424,14 +424,14 @@ async function getConflationMapWays(
           }
         } catch (err) {
           // FIXME: ?
-          console.error('sink node:', sink);
+          console.error("sink node:", sink);
           console.error(err);
         }
       }
     }
 
     const filtered_conflation_map_ways_info = conflation_map_ways_info.filter(
-      ({ cfl_way_id }) => !detours.has(cfl_way_id),
+      ({ cfl_way_id }) => !detours.has(cfl_way_id)
     );
 
     const cmap_ways_by_osm_path_idx = filtered_conflation_map_ways_info.reduce(
@@ -441,12 +441,12 @@ async function getConflationMapWays(
         acc[osm_path_idx].push(d);
         return acc;
       },
-      [],
+      []
     );
 
     // NOTE: map skips empty items
     const sorted_cmap_ways_by_path_idx = cmap_ways_by_osm_path_idx.map(
-      cmap_info_arr => {
+      (cmap_info_arr) => {
         const osm_way_g = new Graph({
           directed: true,
           multigraph: false,
@@ -476,8 +476,8 @@ async function getConflationMapWays(
             const cfl_way_id = lookup[k];
 
             if (!cfl_way_id) {
-              console.error('lookup failed');
-              throw new Error('INVARIANT VIOLATION');
+              console.error("lookup failed");
+              throw new Error("INVARIANT VIOLATION");
             }
 
             toposorted_cmap_ways.push(cfl_way_id);
@@ -490,11 +490,11 @@ async function getConflationMapWays(
           // OSM Way's CMap ways have a cycle or lookup failed
           return cmap_info_arr.map(({ cfl_way_id }) => cfl_way_id);
         }
-      },
+      }
     );
 
     const cfl_path = _.flattenDeep(sorted_cmap_ways_by_path_idx).filter(
-      Boolean,
+      Boolean
     );
 
     /*
@@ -571,10 +571,10 @@ async function getConflationMapWays(
 
     return cfl_path;
   } catch (err) {
-    console.error('!'.repeat(20));
+    console.error("!".repeat(20));
     console.log(JSON.stringify({ dataRequest }, null, 4));
     console.error(err);
-    console.error('!'.repeat(20));
+    console.error("!".repeat(20));
     throw err;
   }
 }
