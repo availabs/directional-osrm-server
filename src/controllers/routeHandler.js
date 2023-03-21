@@ -31,6 +31,7 @@ const getRouteWaysForLocations = async (req, res, next) => {
     const ways = await NodesToWaysService.getConflationMapWays(
       conflation_map_version,
       osrm_result,
+      dataRequest,
     );
 
     res.send({ ways });
