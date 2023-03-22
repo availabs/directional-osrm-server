@@ -480,7 +480,7 @@ async function getConflationMapWays(
         }
 
         try {
-          if (GraphAlgorithms.isAcyclic(osm_way_g)) {
+          if (!GraphAlgorithms.isAcyclic(osm_way_g)) {
             //  FIXME:  try ngraph.path.aStar like above along with osm_way_2_nodes
             throw new Error(
               "Cannot use GraphAlgorithms.topsort on cyclic graph."
