@@ -41,9 +41,9 @@ async function getConflationMapWays(
     nodes = nodes.map((n) => +n);
 
     const req_num = ++req_ctr;
-    const req_name = `getConflationMapWays: req ${req_num}`;
+    const req_name = `==> getConflationMapWays: req ${req_num}, num nodes: ${nodes.length}`;
 
-    console.log(`==> ${req_name}; num nodes: ${nodes.length}`);
+    console.log(req_name);
     console.time(req_name);
 
     await is_connected;
@@ -65,7 +65,7 @@ async function getConflationMapWays(
       );
     }
 
-    const query_timer = `database query_osm_ways: req ${req_num}`;
+    const query_timer = `==> database query_osm_ways: req ${req_num}`;
 
     console.time(query_timer);
 
@@ -159,6 +159,8 @@ async function getConflationMapWays(
     const start_node_idx = nodes.findIndex((n) => seen_osm_nodes.has(n));
     let source = nodes[start_node_idx];
 
+    // If we add toposort for cyclic OSM Way's ConflationMap edges, we could use osm_way_2_nodes.
+    // const osm_way_2_nodes = {};
     const backwards_osm_ways = new Set();
 
     for (const dest of nodes.slice(start_node_idx + 1)) {
@@ -191,12 +193,16 @@ async function getConflationMapWays(
 
         if (e) {
           edge_path.add(e);
+          // osm_way_2_nodes[e] = osm_way_2_nodes[e] || [v];
+          // osm_way_2_nodes[e].push(w);
         } else {
           const e2 = osm_way_lookup[w] && osm_way_lookup[w][v];
 
           if (e2) {
             backwards_osm_ways.add(e2);
             edge_path.add(e2);
+            // osm_way_2_nodes[e] = osm_way_2_nodes[e] || [w];
+            // osm_way_2_nodes[e].push(v);
           }
         }
       }
@@ -393,10 +399,15 @@ async function getConflationMapWays(
             }
           }
         } catch (err) {
-          // FIXME: ?
+          // FIXME: ? How did we get here? Should we be mutating graph in this error handler? ?
+          progress = true;
           cfl_g.removeNode(src);
-          console.error("src node:", src);
+
+          console.error("v".repeat(30));
+          console.error(`request: ${req_ctr}; src node: ${src}`);
+          console.error(JSON.stringify({ dataRequest }, null, 4));
           console.error(err);
+          console.error("^".repeat(30));
         }
       }
 
@@ -423,9 +434,15 @@ async function getConflationMapWays(
             }
           }
         } catch (err) {
-          // FIXME: ?
-          console.error("sink node:", sink);
+          // FIXME: ? How did we get here? Should we be mutating graph in this error handler? ?
+          progress = true;
+          cfl_g.removeNode(sink);
+
+          console.error("v".repeat(30));
+          console.error(`request: ${req_ctr}; sink node: ${sink}`);
+          console.error(JSON.stringify({ dataRequest }, null, 4));
           console.error(err);
+          console.error("^".repeat(30));
         }
       }
     }
@@ -463,6 +480,13 @@ async function getConflationMapWays(
         }
 
         try {
+          if (GraphAlgorithms.isAcyclic(osm_way_g)) {
+            //  FIXME:  try ngraph.path.aStar like above along with osm_way_2_nodes
+            throw new Error(
+              "Cannot use GraphAlgorithms.topsort on cyclic graph."
+            );
+          }
+
           const toposorted_cmap_ways = [];
 
           // This will throw if there is a cycle.
@@ -496,76 +520,6 @@ async function getConflationMapWays(
     const cfl_path = _.flattenDeep(sorted_cmap_ways_by_path_idx).filter(
       Boolean
     );
-
-    /*
-  //  NOTE: This is a heuristic. It does not guarantee correct ordering.
-  //        The difficulties are:
-  //          1.  Not all ConflationMap nodes are in the OSM Nodes.
-  //              Therefore, cannot depend on
-  //          2.  OSM ways can self intersect. This causes cycles and breaks graphlib.alg.toposort.
-  const cfl_path = filtered_conflation_map_ways_info
-    .filter(({ cfl_way_id }) => !detours.has(cfl_way_id))
-    .sort((a, b) => {
-      const { osm_path_idx: path_idx_a, v_node: v_a, w_node: w_a } = a;
-      const { osm_path_idx: path_idx_b, v_node: v_b, w_node: w_b } = b;
-
-      const osm_path_diff = path_idx_a - path_idx_b;
-
-      // Different OSM Ways
-      if (osm_path_diff) {
-        return osm_path_diff;
-      }
-
-      // Same OSM Way
-      // FIXME: Replace the below with a call to a function that gets each cmap
-      // way's index along the osm way. The function can sort all cmap ways
-      // within a osm way, cache the result, then return the sorted order of
-      // the two passed cmap way ids.
-
-      // end node of a is start node of b
-      if (w_a === v_b) {
-        return -1;
-      }
-
-      // end node of b is start node of a
-      if (v_a === w_b) {
-        return 1;
-      }
-
-      const { osm: osm_way_id, osm_fwd } = osm_way_w_dirs[path_idx_a];
-      const osm_node_ids = osm_node_ids_by_way_id[osm_way_id];
-
-      // NOTE: OSM Ways can self-intersect
-      // Consider:
-      //    OSM Way NodeIds         : [a, b, c, a, d]
-      //    Conflation Ways (v,w)   : (a,b), (b,c), (c,a), (a, d)
-
-      const x_a = osm_fwd ? v_a : w_a;
-      const y_a = osm_fwd ? w_a : v_a;
-
-      const x_b = osm_fwd ? v_b : w_b;
-      const y_b = osm_fwd ? w_b : v_b;
-
-      const x_idx_a = osm_node_ids.indexOf(x_a);
-      const y_idx_a =
-        x_idx_a !== -1
-          ? osm_node_ids.findIndex(
-              (osm_node_id, i) => i > x_idx_a && osm_node_id === y_a,
-            )
-          : osm_node_ids.indexOf(y_a);
-
-      const x_idx_b = osm_node_ids.indexOf(x_b);
-      const y_idx_b =
-        x_idx_a !== -1
-          ? osm_node_ids.findIndex(
-              (osm_node_id, i) => i > x_idx_b && osm_node_id === y_b,
-            )
-          : osm_node_ids.indexOf(y_b);
-
-      return Math.max(x_idx_a, y_idx_a) - Math.max(x_idx_b, y_idx_b);
-    })
-    .map(({ cfl_way_id }) => cfl_way_id);
-  */
 
     console.timeEnd(req_name);
 
