@@ -35,7 +35,8 @@ let req_ctr = 0;
 async function getConflationMapWays(
   conflation_map_version,
   { nodes, geometry },
-  dataRequest
+  dataRequest,
+  return_tmcs
 ) {
   try {
     nodes = nodes.map((n) => +n);
@@ -226,21 +227,22 @@ async function getConflationMapWays(
     const sql2 = dedent(
       pgFormat(
         `
-      SELECT
-          a.id                                    AS cfl_way_id,
-          (b.idx - 1)::INTEGER                    AS osm_path_idx,
-          c.node_ids[1]                           AS v_node,
-          c.node_ids[array_upper(c.node_ids, 1)]  AS w_node
-        FROM conflation.%I AS a
-          INNER JOIN UNNEST($1::JSON[]) WITH ORDINALITY AS b(osm_way_desc, idx)
-            ON (
-              ( a.osm = (b.osm_way_desc->>'osm')::INTEGER )
-              AND
-              ( a.osm_fwd = (b.osm_way_desc->>'osm_fwd')::INTEGER )
-            )
-          INNER JOIN conflation.%I AS c
-            USING (id)
-    `,
+          SELECT
+              a.id                                    AS cfl_way_id,
+              a.tmc                                   AS tmc,
+              (b.idx - 1)::INTEGER                    AS osm_path_idx,
+              c.node_ids[1]                           AS v_node,
+              c.node_ids[array_upper(c.node_ids, 1)]  AS w_node
+            FROM conflation.%I AS a
+              INNER JOIN UNNEST($1::JSON[]) WITH ORDINALITY AS b(osm_way_desc, idx)
+                ON (
+                  ( a.osm = (b.osm_way_desc->>'osm')::INTEGER )
+                  AND
+                  ( a.osm_fwd = (b.osm_way_desc->>'osm_fwd')::INTEGER )
+                )
+              INNER JOIN conflation.%I AS c
+                USING (id)
+        `,
         `conflation_map_${conflation_map_version}`,
         `conflation_map_${conflation_map_year}_ways_${conflation_platform_version}`
       )
@@ -522,6 +524,27 @@ async function getConflationMapWays(
     );
 
     console.timeEnd(req_name);
+
+    if (return_tmcs) {
+      const tmcs_path = new Set();
+
+      const cfl_id_2_tmc = conflation_map_ways_info.reduce(
+        (acc, { cfl_way_id, tmc }) => {
+          acc[cfl_way_id] = tmc;
+          return acc;
+        },
+        {}
+      );
+
+      for (const cfl_way_id of cfl_path) {
+        const tmc = cfl_id_2_tmc[cfl_way_id];
+        if (tmc) {
+          tmcs_path.add(tmc);
+        }
+      }
+
+      return [...tmcs_path];
+    }
 
     return cfl_path;
   } catch (err) {

@@ -1,20 +1,25 @@
-const _ = require('lodash');
+const _ = require("lodash");
 
-const OSRMService = require('../services/OSRMService');
-const NodesToWaysService = require('../services/OsmNodes2OsmWaysService');
+const OSRMService = require("../services/OSRMService");
+const NodesToWaysService = require("../services/OsmNodes2OsmWaysService");
 
 const getRouteWaysForLocations = async (req, res, next) => {
   try {
     const {
-      query: { conflation_map_version },
+      query: { conflation_map_version, return_tmcs },
     } = req;
 
+    // eslint-disable-next-line no-underscore-dangle
+    const _return_tmcs = /^(1|true|t|y|yes)$/.test(return_tmcs);
+
+    console.log(JSON.stringify({ query: req.query }, null, 4));
+
     const dataRequest =
-      typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+      typeof req.body === "string" ? JSON.parse(req.body) : req.body;
 
     const osrm_result = await OSRMService.getRouteNodesForLocations(
       conflation_map_version,
-      dataRequest,
+      dataRequest
     );
 
     if (
@@ -32,6 +37,7 @@ const getRouteWaysForLocations = async (req, res, next) => {
       conflation_map_version,
       osrm_result,
       dataRequest,
+      _return_tmcs
     );
 
     res.send({ ways });
