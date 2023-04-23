@@ -1,15 +1,15 @@
 /* eslint-disable global-require */
 
-const cluster = require('cluster');
+const cluster = require("cluster");
 
-const { join } = require('path');
+const { join } = require("path");
 
-const restify = require('restify');
-const corsMiddleware = require('restify-cors-middleware');
+const restify = require("restify");
+const corsMiddleware = require("restify-cors-middleware");
 
-const dotenv = require('dotenv');
+const dotenv = require("dotenv");
 
-dotenv.config({ path: join(__dirname, './config/postgres.env') });
+dotenv.config({ path: join(__dirname, "./config/postgres.env") });
 
 const NUM_WORKERS = 4;
 
@@ -21,23 +21,23 @@ if (cluster.isMaster) {
     cluster.fork();
   }
 
-  cluster.on('exit', worker => {
+  cluster.on("exit", (worker) => {
     console.log(`worker ${worker.process.pid} died`);
   });
 } else {
   const server = restify.createServer({
-    name: 'directional-osrm-server',
-    version: '0.0.1',
+    name: "directional-osrm-server",
+    version: "0.0.1",
   });
 
   const {
     getRouteWaysForLocations,
-  } = require('./src/controllers/routeHandler');
+  } = require("./src/controllers/routeHandler");
 
   const cors = corsMiddleware({
-    origins: ['*'],
-    allowHeaders: ['Authorization'],
-    exposeHeaders: ['Authorization'],
+    origins: ["*"],
+    allowHeaders: ["Authorization"],
+    exposeHeaders: ["Authorization"],
   });
 
   server.pre(cors.preflight);
@@ -47,10 +47,10 @@ if (cluster.isMaster) {
   server.use(restify.plugins.queryParser());
   server.use(restify.plugins.bodyParser());
 
-  server.post('/route', getRouteWaysForLocations);
+  server.post("/route", getRouteWaysForLocations);
 
   server.listen(7182, function cb() {
-    console.log('%s listening at %s', server.name, server.url);
+    console.log("%s listening at %s", server.name, server.url);
   });
 
   console.log(`Worker ${process.pid} started`);

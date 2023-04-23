@@ -1,84 +1,78 @@
-/* eslint no-param-reassign: 0, no-restricted-syntax: 0 */
+/* eslint no-param-reassign: 0, no-restricted-syntax: 0, no-continue: 0, no-underscore-dangle: 0 */
 
-/*
--- You inspect the results in QGIS with the following query:
-
-  SELECT
-    id, wkb_geometry, idx
-  FROM conflation.conflation_map_<version>
-    INNER JOIN
-      -- Copy the response's IDs into the below ARRAY
-      UNNEST(ARRAY[])
-        WITH ORDINALITY AS t(id, idx)
-      USING (id)
-  ;
-*/
-
-const { Pool } = require("pg");
+const { writeFileSync } = require("fs");
+const { join } = require("path");
 
 const dedent = require("dedent");
 const _ = require("lodash");
 
 const { Graph, alg: GraphAlgorithms } = require("@dagrejs/graphlib");
 
-const createGraph = require("ngraph.graph");
-const path = require("ngraph.path");
-
 const pgFormat = require("pg-format");
 
-// NOTE: credentials put into process.env by dotenv in ../../index.js
-const db = new Pool({ max: 10 });
-const is_connected = db.connect();
+const { getDb } = require("./Database");
+const logger = require("../logger");
 
 let req_ctr = 0;
 
-async function getConflationMapWays(
+const FWD = 1;
+const BWD = 0;
+
+/** For debugging. Writes the OSRM response osrm_response_geom to a file viewable in QGIS. */
+function writeOsrmResponseGeometryToFile(osrm_response_geom) {
+  if (process.env.AVAIL_LOGGING_LEVEL === "trace") {
+    // const geojson_file_name = "osrm_response_geometry.geojson";
+    const geojson_file_name = `osrm_response_geometry.${
+      new Date().toISOString().replace(/[^0-9a-z]/gi, "").geojson
+    }`;
+
+    const geojson_file_path = join(__dirname, "../../", geojson_file_name);
+
+    writeFileSync(
+      geojson_file_path,
+      JSON.stringify(
+        {
+          type: "Feature",
+          geometry: osrm_response_geom,
+          properties: { timestamp: new Date() },
+        },
+        null,
+        4
+      )
+    );
+    logger.trace(`WROTE RESPONSE FILE: ${geojson_file_path}`);
+  }
+}
+
+/** Uses the OSRM response osrm_response_geom to create a buffer and get all OSM ways in that buffer. */
+async function getOsmWaysForOsrmResponseGeometry(
   conflation_map_version,
-  { nodes, geometry },
-  dataRequest,
-  return_tmcs
+  osrm_response_geom
 ) {
-  try {
-    nodes = nodes.map((n) => +n);
+  const db = await getDb();
 
-    const req_num = ++req_ctr;
-    const req_name = `==> getConflationMapWays: req ${req_num}, num nodes: ${nodes.length}`;
+  logger.debug(
+    "requesting conflation map ways for OSRM response osrm_response_geom"
+  );
 
-    console.log(req_name);
-    console.time(req_name);
+  const [
+    conflation_map_year,
+    conflation_platform_version,
+  ] = conflation_map_version.split(/_(.*)/);
 
-    await is_connected;
-
-    const query_osm_map_version_sql = dedent(`
-    SELECT
-        osm_map_version
-      FROM conflation.conflation_map_osm_version
-      WHERE ( conflation_map_version = $1 )
-  `);
-
-    const {
-      rows: [{ osm_map_version = null } = {}],
-    } = await db.query(query_osm_map_version_sql, [conflation_map_version]);
-
-    if (!conflation_map_version) {
-      throw new Error(
-        `Unsupported conflation_map_version: ${conflation_map_version}`
-      );
-    }
-
-    const query_timer = `==> database query_osm_ways: req ${req_num}`;
-
-    console.time(query_timer);
-
-    // https://github.com/availabs/NPMRDS_Database/blob/master/sql/osm/create_osm_way_is_roadway_fn.sql
-    // https://gis.stackexchange.com/a/345681
-    const query_osm_ways_sql = dedent(
-      pgFormat(
-        `
+  // https://github.com/availabs/NPMRDS_Database/blob/master/sql/osm/create_osm_way_is_roadway_fn.sql
+  // https://gis.stackexchange.com/a/345681
+  const query_osm_ways_sql = dedent(
+    pgFormat(
+      `
         SELECT DISTINCT ON (a.id)
-            a.id AS osm_way_id,
-            a.node_ids AS osm_node_ids
-          FROM osm.%I AS a
+
+            a.id                                    AS cway_id,
+            a.osm                                   AS osm_way_id,
+            a.osm_fwd,
+            c.node_ids                              AS c_node_ids
+
+          FROM conflation.%I AS a
             INNER JOIN (
               SELECT
                   ST_Subdivide(
@@ -98,460 +92,431 @@ async function getConflationMapWays(
                   b.wkb_geometry
                 )
               )
-          WHERE ( osm.osm_way_is_roadway(tags) )
+            INNER JOIN conflation.%I AS c
+              USING (id)
         ;
       `,
-        `osm_ways_v${osm_map_version}`
-      )
+      `conflation_map_${conflation_map_version}`,
+      `conflation_map_${conflation_map_year}_ways_${conflation_platform_version}`
+    )
+  );
+
+  const { rows: cways_for_osrm_geom } = await db.query({
+    // name: `GET OSM WAYS ${osm_map_version}`,
+    text: query_osm_ways_sql,
+    values: [osrm_response_geom],
+  });
+
+  logger.debug("got conflation map ways for OSRM response osrm_response_geom");
+
+  return cways_for_osrm_geom;
+}
+
+/** Uses the OSRM response osrm_response_geom to create a buffer and get all OSM ways in that buffer. */
+async function getTmcSequenceForConflationMapWayIdSeq(
+  conflation_map_version,
+  cmap_ways_path
+) {
+  const db = await getDb();
+
+  logger.debug(
+    "requesting conflation map ways for OSRM response osrm_response_geom"
+  );
+
+  const [year] = conflation_map_version.match(/\d{4}/);
+
+  const text = dedent(
+    pgFormat(
+      `
+        SELECT
+            a.id          AS cway_id,
+
+            a.tmc,
+
+            b.startlong   AS v_lon,
+            b.startlat    AS v_lat,
+            b.endlong     AS w_lon,
+            b.endlat      AS w_lat
+
+          FROM conflation.%I AS a
+            INNER JOIN
+              UNNEST($1::INTEGER[])
+                WITH ORDINALITY AS t(id, idx)
+              USING (id)
+            INNER JOIN ny.%I AS b
+              USING (tmc)
+          ORDER BY t.idx
+
+      `,
+      `conflation_map_${conflation_map_version}`,
+      `tmc_metadata_${year}`
+    )
+  );
+
+  const { rows: result } = await db.query({
+    // name: `GET OSM WAYS ${osm_map_version}`,
+    text,
+    values: [cmap_ways_path],
+  });
+
+  const tmcs_by_cway_id = {};
+  const toposorted_tmcs = [];
+  const tmcs_to_nodes = {};
+  const tmc_lookup_by_nodes = {};
+
+  // We need to toposort the conflation map ways for each direction of the OSM way.
+  for (const {
+    cway_id,
+    tmc,
+    v_lon: _v_lon,
+    v_lat: _v_lat,
+    w_lon: _w_lon,
+    w_lat: _w_lat,
+  } of result) {
+    tmcs_by_cway_id[cway_id] = tmc;
+
+    if (_.last(toposorted_tmcs) !== tmc) {
+      toposorted_tmcs.push(tmc);
+    }
+
+    const v_lon = Math.round(_v_lon * 100000);
+    const v_lat = Math.round(_v_lat * 100000);
+
+    const w_lon = Math.round(_w_lon * 100000);
+    const w_lat = Math.round(_w_lat * 100000);
+
+    const v_node = `${v_lon} ${v_lat}`;
+    const w_node = `${w_lon} ${w_lat}`;
+
+    tmcs_to_nodes[tmc] = { v_node, w_node };
+
+    tmc_lookup_by_nodes[v_node] = tmc_lookup_by_nodes[v_node] || {};
+    tmc_lookup_by_nodes[v_node][w_node] = tmc;
+  }
+
+  if (toposorted_tmcs.length < 2) {
+    return toposorted_tmcs;
+  }
+
+  const path = [];
+
+  for (let i = 0; i < toposorted_tmcs.length; ++i) {
+    const cur = toposorted_tmcs[i];
+
+    const { v_node: cur_v_node, w_node: cur_w_node } = tmcs_to_nodes[cur];
+
+    const prev = _.last(path);
+
+    if (prev) {
+      const { w_node: prev_w_node } = tmcs_to_nodes[prev];
+
+      const prev_successors = Object.values(
+        tmc_lookup_by_nodes[prev_w_node] || {}
+      );
+
+      if (prev_successors.length > 1) {
+        if (prev_w_node !== cur_v_node) {
+          logger.trace(
+            `cur=${cur} cur_v_node=${cur_v_node} prev=${prev} prev_w_node=${prev_w_node} prev_successors.lenght=${prev_successors.length}`
+          );
+          continue;
+        }
+
+        const cur_has_successors = tmc_lookup_by_nodes[cur_w_node];
+        if (i < toposorted_tmcs.length - 1 && !cur_has_successors) {
+          logger.trace(`!cur=${cur} has no successors`);
+          continue;
+        }
+      }
+    }
+
+    path.push(cur);
+  }
+
+  logger.trace(
+    JSON.stringify(
+      {
+        tmcs_by_cway_id,
+        toposorted_tmcs,
+        tmc_lookup_by_nodes,
+        tmcs_to_nodes,
+        path,
+      },
+      null,
+      4
+    )
+  );
+
+  return path;
+}
+
+// https://www.geeksforgeeks.org/longest-common-subsequence-dp-4/
+// Returns length of LCS for X[0..m-1], Y[0..n-1]
+function lcs(X, Y) {
+  const m = X.length;
+  const n = Y.length;
+
+  const L = new Array(m + 1);
+
+  for (let i = 0; i < L.length; i++) {
+    L[i] = new Array(n + 1);
+  }
+
+  // Following steps build L[m+1][n+1] in bottom up fashion.
+  // Note that L[i][j] contains length of LCS of X[0..i-1] and Y[0..j-1]
+  for (let i = 0; i <= m; i++) {
+    for (let j = 0; j <= n; j++) {
+      if (i === 0 || j === 0) L[i][j] = 0;
+      else if (X[i - 1] === Y[j - 1]) L[i][j] = L[i - 1][j - 1] + 1;
+      else L[i][j] = Math.max(L[i - 1][j], L[i][j - 1]);
+    }
+  }
+
+  // L[m][n] contains length of LCS for X[0..n-1] and Y[0..m-1]
+  return L[m][n];
+}
+
+const best_match_dir = (way_node_ids, cways_fwd, cways_bwd) => {
+  if (cways_fwd && !cways_bwd) {
+    return FWD;
+  }
+
+  if (!cways_fwd && cways_bwd) {
+    return BWD;
+  }
+
+  const cways_fwd_nodes = _.flatten(
+    cways_fwd.map(({ c_node_ids }) => c_node_ids)
+  ).map((n_id) => +n_id);
+
+  const cways_bwd_nodes = _.flatten(
+    cways_bwd.map(({ c_node_ids }) => c_node_ids)
+  ).map((n_id) => +n_id);
+
+  const fwd_lcs = lcs(way_node_ids, cways_fwd_nodes);
+  const bwd_lcs = lcs(way_node_ids, cways_bwd_nodes);
+
+  return +(fwd_lcs >= bwd_lcs);
+};
+
+async function getConflationMapWays(
+  conflation_map_version,
+  {
+    nodes: osrm_response_nodes_seq,
+    ways: osrm_response_ways_seq,
+    way_node_ids: osrm_response_ways_node_ids,
+    geometry: osrm_response_geom,
+  },
+  dataRequest,
+  return_tmcs
+) {
+  const osrm_traversed_ways_set = new Set(
+    osrm_response_ways_seq.map((w) => +w)
+  );
+
+  const req_num = ++req_ctr;
+  const req_name = `==> getConflationMapWays: req ${req_num}, num nodes: ${osrm_response_nodes_seq.length}`;
+
+  writeOsrmResponseGeometryToFile(osrm_response_geom);
+
+  try {
+    osrm_response_nodes_seq = osrm_response_nodes_seq.map((n) => +n);
+
+    console.log(req_name);
+    console.time(req_name);
+
+    const cways_for_osrm_geom = await getOsmWaysForOsrmResponseGeometry(
+      conflation_map_version,
+      osrm_response_geom
     );
 
-    const { rows: osm_ways_result } = await db.query({
-      // name: `GET OSM WAYS ${osm_map_version}`,
-      text: query_osm_ways_sql,
-      values: [geometry],
-    });
+    const cways_by_id = cways_for_osrm_geom.reduce((acc, d) => {
+      const { cway_id } = d;
 
-    console.timeEnd(query_timer);
+      acc[cway_id] = d;
 
-    const g = createGraph({ oriented: false });
+      return acc;
+    }, {});
 
-    const osm_node_ids_by_way_id = osm_ways_result.reduce(
-      (acc, { osm_way_id, osm_node_ids }) => {
-        acc[osm_way_id] = osm_node_ids;
+    const cways_by_osm_dir_by_osm_way_id = cways_for_osrm_geom.reduce(
+      (acc, d) => {
+        const { osm_way_id, osm_fwd } = d;
+
+        acc[osm_way_id] = acc[osm_way_id] || {};
+        acc[osm_way_id][osm_fwd] = acc[osm_way_id][osm_fwd] || [];
+        acc[osm_way_id][osm_fwd].push(d);
+
         return acc;
       },
       {}
     );
 
-    const osm_way_lookup = {};
-
-    const seen_osm_nodes = new Set();
-
-    const seen_osm_ways = new Set();
-
-    for (const { osm_way_id, osm_node_ids } of osm_ways_result) {
-      seen_osm_ways.add(+osm_way_id);
-
-      for (let i = 1; i < osm_node_ids.length; ++i) {
-        const v = +osm_node_ids[i - 1];
-        const w = +osm_node_ids[i];
-
-        seen_osm_nodes.add(v);
-        seen_osm_nodes.add(w);
-
-        osm_way_lookup[v] = osm_way_lookup[v] || {};
-
-        if (osm_way_lookup[v][w] && osm_way_lookup[v][w] !== osm_way_id) {
-          // console.warn('DUPE EDGE.');
-        } else {
-          osm_way_lookup[v][w] = +osm_way_id;
-        }
-
-        // FIXME??? Should this be in the above else block?
-        g.addLink(v, w);
-      }
-    }
-
-    const path_finder = path.aStar(g);
-
-    const edge_path = new Set();
-
-    // Not all OSM nodes are in the conflation map. (crosswalk nodes, for example)
-    const start_node_idx = nodes.findIndex((n) => seen_osm_nodes.has(n));
-    let source = nodes[start_node_idx];
-
-    // If we add toposort for cyclic OSM Way's ConflationMap edges, we could use osm_way_2_nodes.
-    // const osm_way_2_nodes = {};
-    const backwards_osm_ways = new Set();
-
-    for (const dest of nodes.slice(start_node_idx + 1)) {
-      if (!seen_osm_nodes.has(dest)) {
+    // We need to toposort the conflation map ways for each direction of the OSM way.
+    for (let osm_way_id of Object.keys(cways_by_osm_dir_by_osm_way_id)) {
+      // FIXME: We'll have to change this to handle gaps in OSRM response.
+      if (!osrm_traversed_ways_set.has(+osm_way_id)) {
         continue;
       }
 
-      const found_path =
-        path_finder.find(source, dest) || path_finder.find(dest, source);
+      osm_way_id = +osm_way_id;
 
-      if (!found_path) {
-        console.log("NO found_path");
-        continue;
-      }
+      const cways_by_osm_dir = cways_by_osm_dir_by_osm_way_id[osm_way_id];
 
-      const found_path_nodes = found_path.map(({ id }) => +id);
+      for (const dir of Object.keys(cways_by_osm_dir)) {
+        const d = cways_by_osm_dir[dir];
 
-      if (
-        _.last(found_path_nodes) === +source &&
-        _.first(found_path_nodes) === +dest
-      ) {
-        found_path_nodes.reverse();
-      }
-
-      for (let i = 0; i < found_path_nodes.length - 1; ++i) {
-        const v = found_path_nodes[i];
-        const w = found_path_nodes[i + 1];
-
-        const e = osm_way_lookup[v] && osm_way_lookup[v][w];
-
-        if (e) {
-          edge_path.add(e);
-          // osm_way_2_nodes[e] = osm_way_2_nodes[e] || [v];
-          // osm_way_2_nodes[e].push(w);
-        } else {
-          const e2 = osm_way_lookup[w] && osm_way_lookup[w][v];
-
-          if (e2) {
-            backwards_osm_ways.add(e2);
-            edge_path.add(e2);
-            // osm_way_2_nodes[e] = osm_way_2_nodes[e] || [w];
-            // osm_way_2_nodes[e].push(v);
-          }
+        if (d.length === 1) {
+          continue;
         }
-      }
 
-      source = dest;
-    }
-
-    const edges = [...edge_path];
-
-    const osm_way_w_dirs = edges.map((e) => ({
-      osm: +e,
-      osm_fwd: +!backwards_osm_ways.has(e),
-    }));
-
-    // https://stackoverflow.com/a/4607799
-    const [
-      conflation_map_year,
-      conflation_platform_version,
-    ] = conflation_map_version.split(/_(.*)/);
-
-    const sql2 = dedent(
-      pgFormat(
-        `
-          SELECT
-              a.id                                    AS cfl_way_id,
-              a.tmc                                   AS tmc,
-              (b.idx - 1)::INTEGER                    AS osm_path_idx,
-              c.node_ids[1]                           AS v_node,
-              c.node_ids[array_upper(c.node_ids, 1)]  AS w_node
-            FROM conflation.%I AS a
-              INNER JOIN UNNEST($1::JSON[]) WITH ORDINALITY AS b(osm_way_desc, idx)
-                ON (
-                  ( a.osm = (b.osm_way_desc->>'osm')::INTEGER )
-                  AND
-                  ( a.osm_fwd = (b.osm_way_desc->>'osm_fwd')::INTEGER )
-                )
-              INNER JOIN conflation.%I AS c
-                USING (id)
-        `,
-        `conflation_map_${conflation_map_version}`,
-        `conflation_map_${conflation_map_year}_ways_${conflation_platform_version}`
-      )
-    );
-
-    const { rows: conflation_map_ways_info } = await db.query({
-      // name: `GET ConflationMap Ways ${conflation_map_version}`,
-      text: sql2,
-      values: [osm_way_w_dirs],
-    });
-
-    if (conflation_map_ways_info.length === 0) {
-      return null;
-    }
-
-    const cfl_g = new Graph({
-      directed: true,
-      multigraph: false,
-      compound: false,
-    });
-
-    const cfl_nodes_2_edges = {};
-    const rev_cfl_nodes_2_edges = {};
-
-    for (const {
-      cfl_way_id,
-      osm_path_idx,
-      v_node,
-      w_node,
-    } of conflation_map_ways_info) {
-      const v = +v_node;
-      const w = +w_node;
-
-      cfl_nodes_2_edges[v] = cfl_nodes_2_edges[v] || {};
-      cfl_nodes_2_edges[v][w] = { cfl_way_id, osm_path_idx };
-
-      rev_cfl_nodes_2_edges[w] = rev_cfl_nodes_2_edges[w] || {};
-      rev_cfl_nodes_2_edges[w][v] = { cfl_way_id, osm_path_idx };
-
-      cfl_g.setEdge(v, w);
-    }
-
-    const detours = new Set();
-    let progress = true;
-
-    while (progress) {
-      progress = false;
-
-      const gcomponents = [];
-
-      const unseen_gnodes = new Set([cfl_g.nodes()]);
-
-      let queue = [];
-      while (unseen_gnodes.size) {
-        queue = queue.length ? queue : [[...unseen_gnodes][0]];
-
-        let v;
-        while ((v = queue.pop())) {
-          if (!unseen_gnodes.has(v)) {
-            continue;
-          }
-
-          unseen_gnodes.delete(v);
-
-          let comp = gcomponents.find((c) => c.has(v));
-
-          if (!comp) {
-            comp = new Set(v);
-            gcomponents.push(comp);
-          }
-
-          if (cfl_nodes_2_edges[v]) {
-            for (const w of Object.keys(cfl_nodes_2_edges[v])) {
-              if (unseen_gnodes.has(w)) {
-                comp.add(w);
-                queue.push(w);
-              }
-            }
-          }
-
-          if (rev_cfl_nodes_2_edges[v]) {
-            for (const w of Object.keys(rev_cfl_nodes_2_edges[v])) {
-              if (unseen_gnodes.has(w)) {
-                comp.add(w);
-                queue.push(w);
-              }
-            }
-          }
-        }
-      }
-
-      const components_summmary = gcomponents.map((component_nodes_set) => {
-        const component = [...component_nodes_set];
-
-        const {
-          component_min_path_idx,
-          component_max_path_idx,
-        } = component.reduce(
-          (acc, src) => {
-            const d = cfl_nodes_2_edges[src];
-
-            if (!d) {
-              return acc;
-            }
-
-            const dests = Object.keys(d).map((n) => +n);
-
-            for (const dest of dests) {
-              const { osm_path_idx } = cfl_nodes_2_edges[src][dest];
-
-              if (osm_path_idx < acc.component_min_path_idx) {
-                acc.component_min_path_idx = osm_path_idx;
-              }
-
-              if (osm_path_idx > acc.component_max_path_idx) {
-                acc.component_max_path_idx = osm_path_idx;
-              }
-            }
-
-            return acc;
-          },
-          {
-            component_min_path_idx: Infinity,
-            component_max_path_idx: -Infinity,
-          }
-        );
-
-        return {
-          component_nodes_set,
-          component_min_path_idx,
-          component_max_path_idx,
-        };
-      });
-
-      const sources = cfl_g.sources();
-      const sinks = cfl_g.sinks();
-
-      for (const src of sources) {
-        const {
-          component_min_path_idx,
-        } = components_summmary.find(({ component_nodes_set }) =>
-          component_nodes_set.has(src)
-        );
-
-        try {
-          const dests = Object.keys(cfl_nodes_2_edges[src]).map((n) => +n);
-
-          for (const dest of dests) {
-            const { cfl_way_id, osm_path_idx } = cfl_nodes_2_edges[src][dest];
-
-            if (osm_path_idx !== component_min_path_idx) {
-              // console.warn('FOUND SOURCE DETOUR:', cfl_way_id);
-              detours.add(cfl_way_id);
-              cfl_g.removeNode(src);
-              progress = true;
-            }
-          }
-        } catch (err) {
-          // FIXME: ? How did we get here? Should we be mutating graph in this error handler? ?
-          progress = true;
-          cfl_g.removeNode(src);
-
-          console.error("v".repeat(30));
-          console.error(`request: ${req_ctr}; src node: ${src}`);
-          console.error(JSON.stringify({ dataRequest }, null, 4));
-          console.error(err);
-          console.error("^".repeat(30));
-        }
-      }
-
-      for (const sink of sinks) {
-        const {
-          component_max_path_idx,
-        } = components_summmary.find(({ component_nodes_set }) =>
-          component_nodes_set.has(sink)
-        );
-
-        try {
-          const srcs = Object.keys(rev_cfl_nodes_2_edges[sink]).map((n) => +n);
-
-          for (const src of srcs) {
-            const { cfl_way_id, osm_path_idx } = rev_cfl_nodes_2_edges[sink][
-              src
-            ];
-
-            if (osm_path_idx !== component_max_path_idx) {
-              // console.warn('FOUND SINK DETOUR:', cfl_way_id);
-              detours.add(cfl_way_id);
-              cfl_g.removeNode(sink);
-              progress = true;
-            }
-          }
-        } catch (err) {
-          // FIXME: ? How did we get here? Should we be mutating graph in this error handler? ?
-          progress = true;
-          cfl_g.removeNode(sink);
-
-          console.error("v".repeat(30));
-          console.error(`request: ${req_ctr}; sink node: ${sink}`);
-          console.error(JSON.stringify({ dataRequest }, null, 4));
-          console.error(err);
-          console.error("^".repeat(30));
-        }
-      }
-    }
-
-    const filtered_conflation_map_ways_info = conflation_map_ways_info.filter(
-      ({ cfl_way_id }) => !detours.has(cfl_way_id)
-    );
-
-    const cmap_ways_by_osm_path_idx = filtered_conflation_map_ways_info.reduce(
-      (acc, d) => {
-        const { osm_path_idx } = d;
-        acc[osm_path_idx] = acc[osm_path_idx] || [];
-        acc[osm_path_idx].push(d);
-        return acc;
-      },
-      []
-    );
-
-    // NOTE: map skips empty items
-    const sorted_cmap_ways_by_path_idx = cmap_ways_by_osm_path_idx.map(
-      (cmap_info_arr) => {
-        const osm_way_g = new Graph({
+        const g = new Graph({
           directed: true,
-          multigraph: false,
+          // multigraph: true,
           compound: false,
         });
 
         const lookup = {};
 
-        for (const { cfl_way_id, v_node, w_node } of cmap_info_arr) {
-          const k = `${v_node}-${w_node}`;
-          lookup[k] = cfl_way_id;
+        for (const { cway_id, c_node_ids } of d) {
+          const v_node = _.first(c_node_ids);
+          const w_node = _.last(c_node_ids);
 
-          osm_way_g.setEdge(v_node, w_node);
+          lookup[v_node] = lookup[v_node] || {};
+          lookup[v_node][w_node] = cway_id;
+
+          // g.setEdge(v_node, w_node, cway_id, cway_id);
+          g.setEdge(v_node, w_node, cway_id);
         }
 
-        try {
-          if (!GraphAlgorithms.isAcyclic(osm_way_g)) {
-            //  FIXME:  try ngraph.path.aStar like above along with osm_way_2_nodes
-            throw new Error(
-              "Cannot use GraphAlgorithms.topsort on cyclic graph."
-            );
-          }
+        if (!GraphAlgorithms.isAcyclic(g)) {
+          // TODO: Order the cways when cyclic
+          logger.debug(`osm_way ${osm_way_id} dir ${dir} IS CYCLIC`);
+          continue;
+        }
 
-          const toposorted_cmap_ways = [];
+        const toposorted = GraphAlgorithms.topsort(g);
 
-          // This will throw if there is a cycle.
-          const toposorted_nodes = GraphAlgorithms.topsort(osm_way_g);
+        const toposorted_cways = [];
 
-          let [v] = toposorted_nodes;
-          for (let i = 1; i < toposorted_nodes.length; ++i) {
-            const w = toposorted_nodes[i];
+        for (let i = 1; i < toposorted.length; ++i) {
+          const v = toposorted[i - 1];
+          const w = toposorted[i];
 
-            const k = `${v}-${w}`;
-            const cfl_way_id = lookup[k];
+          const cway_id = lookup[v][w];
 
-            if (!cfl_way_id) {
-              console.error("lookup failed");
-              throw new Error("INVARIANT VIOLATION");
-            }
+          toposorted_cways.push(cways_by_id[cway_id]);
+        }
 
-            toposorted_cmap_ways.push(cfl_way_id);
+        cways_by_osm_dir[dir] = toposorted_cways;
+      }
+    }
 
-            v = w;
-          }
+    const path = [];
 
-          return toposorted_cmap_ways;
-        } catch (err) {
-          // OSM Way's CMap ways have a cycle or lookup failed
-          return cmap_info_arr.map(({ cfl_way_id }) => cfl_way_id);
+    let prev_last;
+    for (let i = 0; i < osrm_response_ways_seq.length; ++i) {
+      const osm_way_id = osrm_response_ways_seq[i];
+      let traversed_osm_node_ids = osrm_response_ways_node_ids[i];
+
+      const cways_by_osm_dir = cways_by_osm_dir_by_osm_way_id[osm_way_id];
+
+      const best_dir = best_match_dir(
+        traversed_osm_node_ids,
+        cways_by_osm_dir[FWD],
+        cways_by_osm_dir[BWD]
+      );
+
+      const cways = cways_by_osm_dir[best_dir];
+
+      if (prev_last) {
+        const prev_last_idx = traversed_osm_node_ids.indexOf(prev_last);
+        if (prev_last_idx > -1) {
+          traversed_osm_node_ids = traversed_osm_node_ids.slice(
+            prev_last_idx + 1
+          );
         }
       }
-    );
 
-    const cfl_path = _.flattenDeep(sorted_cmap_ways_by_path_idx).filter(
-      Boolean
-    );
+      const path_arr = [];
+      let remaining_osm_node_ids = traversed_osm_node_ids;
+
+      for (let j = 0; j < cways.length; ++j) {
+        if (remaining_osm_node_ids.length === 0) {
+          break;
+        }
+
+        const cway = cways[j];
+
+        const c_node_ids = cway.c_node_ids.map((nid) => +nid);
+
+        if (_.last(c_node_ids) === prev_last) {
+          continue;
+        }
+
+        path_arr.push(cway);
+
+        remaining_osm_node_ids = _.difference(
+          remaining_osm_node_ids,
+          c_node_ids
+        );
+
+        prev_last = _.last(c_node_ids);
+      }
+
+      // prev_last = _.last(_.last(path_arr).c_node_ids);
+
+      path.push(path_arr);
+    }
+
+    const cmap_ways_path = _.flattenDeep(path).map(({ cway_id }) => +cway_id);
 
     console.timeEnd(req_name);
 
     if (return_tmcs) {
-      const tmcs_path = new Set();
-
-      const cfl_id_2_tmc = conflation_map_ways_info.reduce(
-        (acc, { cfl_way_id, tmc }) => {
-          acc[cfl_way_id] = tmc;
-          return acc;
-        },
-        {}
+      const tmcs_path = await getTmcSequenceForConflationMapWayIdSeq(
+        conflation_map_version,
+        cmap_ways_path
       );
 
-      for (const cfl_way_id of cfl_path) {
-        const tmc = cfl_id_2_tmc[cfl_way_id];
-        if (tmc) {
-          tmcs_path.add(tmc);
-        }
-      }
+      const [year] = conflation_map_version.match(/\d{4}/);
 
-      return [...tmcs_path];
+      // We log this to help developers visually inspect the response.
+      const tmc_qa_sql = dedent(`-- QA SQL for QGIS
+        SELECT
+          tmc, wkb_geometry, idx
+        FROM ny.npmrds_shapefile_${year}
+          INNER JOIN
+            UNNEST(ARRAY[${tmcs_path.map((id) => `'${id}'`)}])
+              WITH ORDINALITY AS t(tmc, idx)
+            USING (tmc)
+        ;
+      `);
+
+      logger.debug(tmc_qa_sql);
+
+      return tmcs_path;
     }
 
-    return cfl_path;
+    // We log this to help developers visually inspect the response.
+    const qa_sql = dedent(`-- QA SQL for QGIS
+      SELECT
+        id, wkb_geometry, idx
+      FROM conflation.conflation_map_${conflation_map_version}
+        INNER JOIN
+          UNNEST(ARRAY[${cmap_ways_path}])
+            WITH ORDINALITY AS t(id, idx)
+          USING (id)
+      ;
+    `);
+
+    logger.debug(qa_sql);
+
+    return cmap_ways_path;
   } catch (err) {
-    console.error("!".repeat(20));
-    console.log(JSON.stringify({ dataRequest }, null, 4));
-    console.error(err);
-    console.error("!".repeat(20));
+    logger.error("!".repeat(20));
+    logger.error(err);
+    logger.error(JSON.stringify({ dataRequest }, null, 4));
+    logger.error("!".repeat(20));
     throw err;
   }
 }
