@@ -322,7 +322,7 @@ async function getConflationMapWays(
   try {
     osrm_response_nodes_seq = osrm_response_nodes_seq.map((n) => +n);
 
-    console.log(req_name);
+    // console.log(req_name);
     console.time(req_name);
 
     const cways_for_osrm_geom = await getOsmWaysForOsrmResponseGeometry(
@@ -402,9 +402,11 @@ async function getConflationMapWays(
           const v = toposorted[i - 1];
           const w = toposorted[i];
 
-          const cway_id = lookup[v][w];
+          const cway_id = lookup[v]?.[w];
 
-          toposorted_cways.push(cways_by_id[cway_id]);
+          if (cway_id) {
+            toposorted_cways.push(cways_by_id[cway_id]);
+          }
         }
 
         cways_by_osm_dir[dir] = toposorted_cways;
